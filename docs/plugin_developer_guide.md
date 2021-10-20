@@ -958,6 +958,81 @@ config.SetAccessToken(accessToken)
 config.SetRefreshToken(newRefreshToken)
 ```
 
+### 5.3 VPC Compute Resource Identity Authentication
+
+#### 5.3.1 Get the IAM Access Token 
+The IBM CLoud CLI supports logging in as a VPC compute resource identity. The CLI will fetch a VPC instance identity token and exchange it for an IAM access token when logging in as a VPC compute resource identity. This access token is stored in configuration once a user successfully logs into the CLI. 
+
+Plug-ins can invoke `plugin.PluginContext.IsLoggedInAsCRI()` and `plugin.PluginContext.CRIType()` in the CLI SDK to detect whether the user has logged in as a VPC compute resource identity.
+You can get the IAM access token resulting from the user logging in as a VPC compute resource identity from the IBM CLoud SDK as follows:
+
+```go
+func (demo *DemoPlugin) Run(context plugin.PluginContext, args []string){
+    // confirm user is logged in as a VPC compute resource identity
+    isLoggedInAsCRI := context.IsLoggedInAsCRI()
+    criType := context.CRIType()
+    if isLoggedInAsCRI && criType == "VPC" {
+        // get IAM access token
+        iamToken := context.IAMToken()
+        if iamToken == "" {
+            ui.Say("IAM token is not available. Have you logged in?")
+            return
+        }
+    }
+    ...
+}
+```
+
+This token can be used to access IBM Cloud back-end APIs. You can set the `Authorization` header of the HTTP request to the token value.
+
+```go
+h := http.Header{}
+h.Set("Authorization", iamToken)
+```
+
+#### 5.3.2 Get a VPC Instance Identity Token and exchange it for an IAM Access Token
+When an HTTP 401 or 403 is returned from back-end service, it could mean the access token is expired. You can manually fetch a new VPC instance identity token, and exchange it for a new IAM access token.
+
+Example:
+
+```go
+// create a standard HTTP client
+c := &rest.Client{
+    HTTPClient:    http.NewHTTPClient(config),
+    DefaultHeader: http.DefaultHeader(config),
+}
+// create a vpc client using default configuration
+client := vpc.NewClient(vpc.DefaultConfig(config.VPCCRITokenURL(), vpc.DefaultMetadataServiceVersion), c)
+// fetch an instance identity token from the metadata server
+identityToken, err := client.GetInstanceIdentityToken()
+if err != nil {
+    return err
+}
+
+// get the existing targeted IAM trusted profile ID of the CLI session
+targetProfile := config.CurrentProfile()
+profileID := targetProfile.ID
+// prepare IAM token request using the existing targeted profile. See https://godoc.org/github.com/IBM-Cloud/ibm-cloud-cli-sdk/bluemix/authentication/vpc# NewIAMAccessTokenRequest for API details
+req, err := vpc.NewIAMAccessTokenRequest(profileID, "", identityToken.AccessToken)
+if err != nil {
+    return err
+}
+
+// get the new access token
+iamToken, err := client.GetIAMAccessToken(req)
+if err != nil {
+    return err
+}
+accessToken := iamToken.AccessToken
+// optional, set access token back to config
+ret := fmt.Sprintf("%s %s", iamToken.TokenType, accessToken)
+config.SetIAMToken(ret)
+```
+
+For more details of the API, refer to the docs for [vpc](https://godoc.org/github.com/IBM-Cloud/ibm-cloud-cli-sdk/bluemix/authentication/vpc)
+
+_Note_: Currently a refresh token is not supported when authenticating as a VPC compute resource identity.
+
 
 ## 6. Utility for Unit Testing
 
